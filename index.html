@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>GLB PBR Viewer</title>
+    <link rel="stylesheet" href="./src/style.css" />
+  </head>
+  <body>
+    <aside class="panel">
+      <h1>GLB Viewer</h1>
+
+      <div id="loadStatus" class="load-status"></div>
+
+      <section>
+        <h2>Model</h2>
+        <label for="modelSelect">From public/models</label>
+        <select id="modelSelect"></select>
+        <button id="loadModelButton">Load Selected Model</button>
+        <label for="modelUpload">Or upload .glb/.gltf</label>
+        <input id="modelUpload" type="file" accept=".glb,.gltf,model/gltf-binary,model/gltf+json" />
+      </section>
+
+      <section>
+        <h2>Lighting</h2>
+        <label for="hdrSelect">HDR from public/hdr</label>
+        <select id="hdrSelect"></select>
+        <button id="loadHdrButton">Load Selected HDR</button>
+        <label for="hdrUpload">Or upload .hdr/.exr</label>
+        <input id="hdrUpload" type="file" accept=".hdr,.exr,image/vnd.radiance" />
+
+        <label for="lightType">Key light type</label>
+        <select id="lightType">
+          <option value="directional">Directional</option>
+          <option value="point">Point</option>
+          <option value="spot">Spot</option>
+          <option value="hemisphere">Hemisphere</option>
+          <option value="none">None</option>
+        </select>
+
+        <label class="row"><input id="ambientEnabled" type="checkbox" checked /> Ambient enabled</label>
+        <label class="row"><input id="envBackground" type="checkbox" /> Show HDR as background</label>
+      </section>
+
+      <section>
+        <h2>Ground & Shadows</h2>
+        <label class="row"><input id="gridEnabled" type="checkbox" checked /> Grid floor</label>
+        <label class="row"><input id="planeEnabled" type="checkbox" /> Shadow receiver plane</label>
+        <label class="row"><input id="shadowsEnabled" type="checkbox" checked /> Cast/receive shadows</label>
+      </section>
+
+      <p class="hint">Tip: drag and drop a .glb/.gltf or .hdr/.exr anywhere in the viewport to load it.</p>
+    </aside>
+
+    <main id="viewport"></main>
+
+    <script type="module" src="./src/main.js"></script>
+  </body>
+</html>
