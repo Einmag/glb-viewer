@@ -7,46 +7,90 @@
     <link rel="stylesheet" href="./src/style.css" />
   </head>
   <body>
-    <aside class="panel">
+    <button id="panelToggle" class="panel-toggle" aria-label="Toggle panel" aria-expanded="true">&#9776;</button>
+
+    <aside class="panel" id="panel">
       <h1>GLB Viewer</h1>
+
+      <div class="quality-row">
+        <label for="qualitySelect">Quality</label>
+        <select id="qualitySelect">
+          <option value="low">Low</option>
+          <option value="medium">Medium</option>
+          <option value="high">High</option>
+        </select>
+      </div>
 
       <div id="loadStatus" class="load-status"></div>
 
       <section>
-        <h2>Model</h2>
-        <label for="modelSelect">From public/models</label>
-        <select id="modelSelect"></select>
-        <button id="loadModelButton">Load Selected Model</button>
-        <label for="modelUpload">Or upload .glb/.gltf</label>
-        <input id="modelUpload" type="file" accept=".glb,.gltf,model/gltf-binary,model/gltf+json" />
+        <h2 class="section-header" data-target="sectionModel">Model <span class="chevron">&#9660;</span></h2>
+        <div id="sectionModel" class="section-body">
+          <label for="modelSelect">From public/models</label>
+          <select id="modelSelect"></select>
+          <button id="loadModelButton">Load Selected Model</button>
+          <label for="modelUpload">Or upload .glb/.gltf</label>
+          <input id="modelUpload" type="file" accept=".glb,.gltf,model/gltf-binary,model/gltf+json" />
+          <button id="resetCameraButton">Reset Camera</button>
+        </div>
       </section>
 
       <section>
-        <h2>Lighting</h2>
-        <label for="hdrSelect">HDR from public/hdr</label>
-        <select id="hdrSelect"></select>
-        <button id="loadHdrButton">Load Selected HDR</button>
-        <label for="hdrUpload">Or upload .hdr/.exr</label>
-        <input id="hdrUpload" type="file" accept=".hdr,.exr,image/vnd.radiance" />
+        <h2 class="section-header closed" data-target="sectionLighting">Lighting <span class="chevron">&#9660;</span></h2>
+        <div id="sectionLighting" class="section-body closed">
+          <label for="hdrSelect">HDR from public/hdr</label>
+          <select id="hdrSelect"></select>
+          <button id="loadHdrButton">Load Selected HDR</button>
+          <label for="hdrUpload">Or upload .hdr/.exr</label>
+          <input id="hdrUpload" type="file" accept=".hdr,.exr,image/vnd.radiance" />
 
-        <label for="lightType">Key light type</label>
-        <select id="lightType">
-          <option value="directional">Directional</option>
-          <option value="point">Point</option>
-          <option value="spot">Spot</option>
-          <option value="hemisphere">Hemisphere</option>
-          <option value="none">None</option>
-        </select>
+          <label for="hdrExposure">HDR Exposure: <span id="hdrExposureVal">1.0</span></label>
+          <input id="hdrExposure" type="range" min="0" max="3" step="0.05" value="1.0" />
 
-        <label class="row"><input id="ambientEnabled" type="checkbox" checked /> Ambient enabled</label>
-        <label class="row"><input id="envBackground" type="checkbox" /> Show HDR as background</label>
+          <label for="lightType">Key light type</label>
+          <select id="lightType">
+            <option value="directional">Directional</option>
+            <option value="point">Point</option>
+            <option value="spot">Spot</option>
+            <option value="hemisphere">Hemisphere</option>
+            <option value="none">None</option>
+          </select>
+
+          <label for="keyLightMult">Key light intensity: <span id="keyLightMultVal">1.0</span>×</label>
+          <input id="keyLightMult" type="range" min="0" max="3" step="0.05" value="1.0" />
+
+          <label for="ambientIntensity">Ambient intensity: <span id="ambientIntensityVal">0.25</span></label>
+          <input id="ambientIntensity" type="range" min="0" max="2" step="0.05" value="0.25" />
+
+          <label class="row"><input id="ambientEnabled" type="checkbox" checked /> Ambient enabled</label>
+          <label class="row"><input id="envBackground" type="checkbox" /> Show HDR as background</label>
+        </div>
       </section>
 
       <section>
-        <h2>Ground & Shadows</h2>
-        <label class="row"><input id="gridEnabled" type="checkbox" checked /> Grid floor</label>
-        <label class="row"><input id="planeEnabled" type="checkbox" /> Shadow receiver plane</label>
-        <label class="row"><input id="shadowsEnabled" type="checkbox" checked /> Cast/receive shadows</label>
+        <h2 class="section-header closed" data-target="sectionGround">Ground &amp; Shadows <span class="chevron">&#9660;</span></h2>
+        <div id="sectionGround" class="section-body closed">
+          <label class="row"><input id="gridEnabled" type="checkbox" checked /> Grid floor</label>
+          <label class="row"><input id="planeEnabled" type="checkbox" /> Shadow receiver plane</label>
+          <label class="row"><input id="shadowsEnabled" type="checkbox" checked /> Cast/receive shadows</label>
+        </div>
+      </section>
+
+      <section>
+        <h2 class="section-header closed" data-target="sectionAnimation">Animation <span class="chevron">&#9660;</span></h2>
+        <div id="sectionAnimation" class="section-body closed">
+          <p id="animNone" class="hint">No animations in loaded model.</p>
+          <div id="animControls" style="display:none">
+            <label for="animSelect">Clip</label>
+            <select id="animSelect"></select>
+            <div class="row" style="margin-top:8px">
+              <button id="animPlay" style="margin-top:0">&#9654; Play</button>
+              <button id="animPause" style="margin-top:0">&#10074;&#10074; Pause</button>
+              <button id="animStop" style="margin-top:0">&#9632; Stop</button>
+            </div>
+            <label class="row"><input id="animLoop" type="checkbox" checked /> Loop</label>
+          </div>
+        </div>
       </section>
 
       <p class="hint">Tip: drag and drop a .glb/.gltf or .hdr/.exr anywhere in the viewport to load it.</p>
