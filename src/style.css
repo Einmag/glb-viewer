@@ -225,6 +225,12 @@ input[type='range'] {
   text-align: right;
 }
 
+#blendshapeControls {
+  max-height: 320px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
 #viewport {
   position: relative;
   min-width: 0;

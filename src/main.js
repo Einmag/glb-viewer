@@ -315,25 +315,38 @@ function getMaterialReference(material) {
 function createOverrideMaterial(mesh, mode) {
   const sourceMaterial = getMaterialReference(mesh.userData.originalMaterial || mesh.material);
   const baseColor = sourceMaterial?.color ? sourceMaterial.color.clone() : new THREE.Color(0xffffff);
+  const hasMorphTargets = !!mesh.morphTargetInfluences;
+  const hasMorphNormals = !!mesh.geometry?.morphAttributes?.normal?.length;
 
   const commonSettings = {
     color: baseColor,
     side: sourceMaterial?.side ?? THREE.FrontSide,
     transparent: sourceMaterial?.transparent ?? false,
     opacity: sourceMaterial?.opacity ?? 1,
+    map: sourceMaterial?.map ?? null,
+    alphaMap: sourceMaterial?.alphaMap ?? null,
+    normalMap: sourceMaterial?.normalMap ?? null,
     flatShading: false
   };
 
+  const applyDeformationFlags = (material) => {
+    material.skinning = !!mesh.isSkinnedMesh;
+    if ('morphTargets' in material) material.morphTargets = hasMorphTargets;
+    if ('morphNormals' in material) material.morphNormals = hasMorphNormals;
+    material.needsUpdate = true;
+    return material;
+  };
+
   if (mode === 'matte') {
-    return new THREE.MeshStandardMaterial({
+    return applyDeformationFlags(new THREE.MeshStandardMaterial({
       ...commonSettings,
       roughness: 1,
       metalness: 0,
       envMapIntensity: 0
-    });
+    }));
   }
 
-  return new THREE.MeshPhysicalMaterial({
+  return applyDeformationFlags(new THREE.MeshPhysicalMaterial({
     ...commonSettings,
     color: new THREE.Color(0xffffff),
     roughness: 0,
@@ -341,7 +354,7 @@ function createOverrideMaterial(mesh, mode) {
     clearcoat: 1,
     clearcoatRoughness: 0,
     envMapIntensity: 1.5
-  });
+  }));
 }
 
 function applyMaterialOverride(mode) {
@@ -387,25 +400,66 @@ function resetBlendshapeControls() {
   ui.blendshapeNone.style.display = '';
 }
 
+function clampBlendshapeValue(value) {
+  return Math.min(1, Math.max(0, value));
+}
+
+function hasMeaningfulMorphPosition(geometry, targetIndex, epsilon = 1e-6) {
+  const morphPosition = geometry?.morphAttributes?.position?.[targetIndex];
+  const values = morphPosition?.array;
+  if (!values?.length) return false;
+
+  for (let i = 0; i < values.length; i += 1) {
+    if (Math.abs(values[i]) > epsilon) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 function setupBlendshapeControls(model) {
   resetBlendshapeControls();
 
   const groups = [];
   model.traverse((child) => {
-    if (!child.isMesh || !child.morphTargetDictionary || !child.morphTargetInfluences) return;
+    if (!child.isMesh || !child.morphTargetInfluences?.length) return;
 
-    const entries = Object.entries(child.morphTargetDictionary)
+    const influences = child.morphTargetInfluences;
+    const dictionary = child.morphTargetDictionary || {};
+    const entries = Object.entries(dictionary)
       .sort((a, b) => a[1] - b[1]);
+
+    // Some exports omit target names; build stable fallback names so sliders still work.
+    const usedIndices = new Set(entries.map(([, index]) => index));
+    for (let i = 0; i < influences.length; i += 1) {
+      if (!usedIndices.has(i)) {
+        entries.push([`Target ${i}`, i]);
+      }
+    }
+
+    entries.sort((a, b) => a[1] - b[1]);
     if (!entries.length) return;
+
+    const morphPositionCount = child.geometry?.morphAttributes?.position?.length ?? 0;
+    const morphNormalCount = child.geometry?.morphAttributes?.normal?.length ?? 0;
+    const deformingEntries = entries.filter(([, index]) => hasMeaningfulMorphPosition(child.geometry, index));
+
+    if (!deformingEntries.length) return;
 
     groups.push({
       meshName: child.name || child.parent?.name || '(unnamed mesh)',
-      influences: child.morphTargetInfluences,
-      entries
+      influences,
+      entries: deformingEntries,
+      morphPositionCount,
+      morphNormalCount
     });
   });
 
-  if (!groups.length) return;
+  if (!groups.length) {
+    ui.blendshapeNone.textContent = 'No deforming position blendshapes found in loaded model.';
+    return;
+  }
 
   const fragment = document.createDocumentFragment();
 
@@ -415,7 +469,7 @@ function setupBlendshapeControls(model) {
 
     const title = document.createElement('p');
     title.className = 'blendshape-group-title';
-    title.textContent = group.meshName;
+    title.textContent = `${group.meshName} (targets: ${group.influences.length}, pos: ${group.morphPositionCount}, nrm: ${group.morphNormalCount})`;
     groupEl.appendChild(title);
 
     for (const [targetName, targetIndex] of group.entries) {
@@ -435,12 +489,19 @@ function setupBlendshapeControls(model) {
       slider.min = '0';
       slider.max = '1';
       slider.step = '0.01';
-      slider.value = String(group.influences[targetIndex] ?? 0);
+      const initialValue = clampBlendshapeValue(Number(group.influences[targetIndex] ?? 0));
+      group.influences[targetIndex] = initialValue;
+      slider.value = String(initialValue);
 
       valueSpan.textContent = Number(slider.value).toFixed(2);
 
       slider.addEventListener('input', () => {
-        const value = Number(slider.value);
+        if (currentAction && !currentAction.paused) {
+          currentAction.paused = true;
+          ui.animPause.textContent = '▶ Resume';
+        }
+        const value = clampBlendshapeValue(Number(slider.value));
+        slider.value = String(value);
         group.influences[targetIndex] = value;
         valueSpan.textContent = value.toFixed(2);
       });
