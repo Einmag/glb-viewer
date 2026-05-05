@@ -186,6 +186,45 @@ input[type='range'] {
   line-height: 1.35;
 }
 
+.blendshape-group {
+  margin: 8px 0 12px;
+  padding: 8px;
+  border: 1px solid #2a374a;
+  border-radius: 6px;
+  background: #0d1523;
+}
+
+.blendshape-group-title {
+  margin: 0 0 8px;
+  color: #c9d5e0;
+  font-size: 0.8rem;
+  font-weight: 600;
+  word-break: break-word;
+}
+
+.blendshape-row {
+  margin-bottom: 8px;
+}
+
+.blendshape-row:last-child {
+  margin-bottom: 0;
+}
+
+.blendshape-row label {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 0.8rem;
+}
+
+.blendshape-value {
+  color: #8ea0b5;
+  min-width: 36px;
+  text-align: right;
+}
+
 #viewport {
   position: relative;
   min-width: 0;

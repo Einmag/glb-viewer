@@ -168,6 +168,7 @@ const ui = {
   ambientIntensityVal: document.querySelector('#ambientIntensityVal'),
   ambientEnabled: document.querySelector('#ambientEnabled'),
   envBackground: document.querySelector('#envBackground'),
+  materialOverride: document.querySelector('#materialOverride'),
   gridEnabled: document.querySelector('#gridEnabled'),
   planeEnabled: document.querySelector('#planeEnabled'),
   shadowsEnabled: document.querySelector('#shadowsEnabled'),
@@ -178,6 +179,8 @@ const ui = {
   animPause: document.querySelector('#animPause'),
   animStop: document.querySelector('#animStop'),
   animLoop: document.querySelector('#animLoop'),
+  blendshapeNone: document.querySelector('#blendshapeNone'),
+  blendshapeControls: document.querySelector('#blendshapeControls'),
   panel: document.querySelector('#panel'),
   panelToggle: document.querySelector('#panelToggle'),
   qualitySelect: document.querySelector('#qualitySelect')
@@ -218,17 +221,29 @@ function disposeCurrentModel() {
   if (!currentModel) return;
 
   stopAnimation();
+  resetBlendshapeControls();
+
+  const materialsToDispose = new Set();
 
   currentModel.traverse((child) => {
     if (!child.isMesh) return;
     child.geometry?.dispose();
 
+    const originalMaterial = child.userData?.originalMaterial;
+    if (Array.isArray(originalMaterial)) {
+      originalMaterial.forEach((material) => material && materialsToDispose.add(material));
+    } else if (originalMaterial) {
+      materialsToDispose.add(originalMaterial);
+    }
+
     if (Array.isArray(child.material)) {
-      child.material.forEach((material) => material.dispose());
+      child.material.forEach((material) => material && materialsToDispose.add(material));
     } else {
-      child.material?.dispose();
+      if (child.material) materialsToDispose.add(child.material);
     }
   });
+
+  materialsToDispose.forEach((material) => material.dispose());
 
   root.remove(currentModel);
   currentModel = null;
@@ -267,6 +282,182 @@ function frameModel(model) {
   // Store for reset
   defaultCameraPosition.copy(newPos);
   defaultCameraTarget.set(0, 0, 0);
+}
+
+function smoothMeshNormals(mesh) {
+  const geometry = mesh.geometry;
+  if (!geometry?.attributes?.position) return;
+
+  geometry.computeVertexNormals();
+  if (geometry.attributes.normal) {
+    geometry.attributes.normal.needsUpdate = true;
+  }
+
+  if (Array.isArray(mesh.material)) {
+    for (const material of mesh.material) {
+      if (!material) continue;
+      material.flatShading = false;
+      material.needsUpdate = true;
+    }
+  } else if (mesh.material) {
+    mesh.material.flatShading = false;
+    mesh.material.needsUpdate = true;
+  }
+}
+
+function getMaterialReference(material) {
+  if (Array.isArray(material)) {
+    return material.find((entry) => !!entry) || null;
+  }
+  return material || null;
+}
+
+function createOverrideMaterial(mesh, mode) {
+  const sourceMaterial = getMaterialReference(mesh.userData.originalMaterial || mesh.material);
+  const baseColor = sourceMaterial?.color ? sourceMaterial.color.clone() : new THREE.Color(0xffffff);
+
+  const commonSettings = {
+    color: baseColor,
+    side: sourceMaterial?.side ?? THREE.FrontSide,
+    transparent: sourceMaterial?.transparent ?? false,
+    opacity: sourceMaterial?.opacity ?? 1,
+    flatShading: false
+  };
+
+  if (mode === 'matte') {
+    return new THREE.MeshStandardMaterial({
+      ...commonSettings,
+      roughness: 1,
+      metalness: 0,
+      envMapIntensity: 0
+    });
+  }
+
+  return new THREE.MeshPhysicalMaterial({
+    ...commonSettings,
+    color: new THREE.Color(0xffffff),
+    roughness: 0,
+    metalness: 1,
+    clearcoat: 1,
+    clearcoatRoughness: 0,
+    envMapIntensity: 1.5
+  });
+}
+
+function applyMaterialOverride(mode) {
+  if (!currentModel) return;
+
+  currentModel.traverse((child) => {
+    if (!child.isMesh) return;
+
+    if (!child.userData.originalMaterial) {
+      child.userData.originalMaterial = child.material;
+    }
+
+    const currentMaterial = child.material;
+    if (mode === 'original') {
+      const originalMaterial = child.userData.originalMaterial;
+      if (currentMaterial !== originalMaterial) {
+        if (Array.isArray(currentMaterial)) {
+          currentMaterial.forEach((material) => material?.dispose());
+        } else {
+          currentMaterial?.dispose();
+        }
+        child.material = originalMaterial;
+      }
+      return;
+    }
+
+    const originalMaterial = child.userData.originalMaterial;
+    if (currentMaterial !== originalMaterial) {
+      if (Array.isArray(currentMaterial)) {
+        currentMaterial.forEach((material) => material?.dispose());
+      } else {
+        currentMaterial?.dispose();
+      }
+    }
+
+    child.material = createOverrideMaterial(child, mode);
+  });
+}
+
+function resetBlendshapeControls() {
+  ui.blendshapeControls.innerHTML = '';
+  ui.blendshapeControls.style.display = 'none';
+  ui.blendshapeNone.style.display = '';
+}
+
+function setupBlendshapeControls(model) {
+  resetBlendshapeControls();
+
+  const groups = [];
+  model.traverse((child) => {
+    if (!child.isMesh || !child.morphTargetDictionary || !child.morphTargetInfluences) return;
+
+    const entries = Object.entries(child.morphTargetDictionary)
+      .sort((a, b) => a[1] - b[1]);
+    if (!entries.length) return;
+
+    groups.push({
+      meshName: child.name || child.parent?.name || '(unnamed mesh)',
+      influences: child.morphTargetInfluences,
+      entries
+    });
+  });
+
+  if (!groups.length) return;
+
+  const fragment = document.createDocumentFragment();
+
+  for (const group of groups) {
+    const groupEl = document.createElement('div');
+    groupEl.className = 'blendshape-group';
+
+    const title = document.createElement('p');
+    title.className = 'blendshape-group-title';
+    title.textContent = group.meshName;
+    groupEl.appendChild(title);
+
+    for (const [targetName, targetIndex] of group.entries) {
+      const row = document.createElement('div');
+      row.className = 'blendshape-row';
+
+      const label = document.createElement('label');
+
+      const nameSpan = document.createElement('span');
+      nameSpan.textContent = targetName;
+
+      const valueSpan = document.createElement('span');
+      valueSpan.className = 'blendshape-value';
+
+      const slider = document.createElement('input');
+      slider.type = 'range';
+      slider.min = '0';
+      slider.max = '1';
+      slider.step = '0.01';
+      slider.value = String(group.influences[targetIndex] ?? 0);
+
+      valueSpan.textContent = Number(slider.value).toFixed(2);
+
+      slider.addEventListener('input', () => {
+        const value = Number(slider.value);
+        group.influences[targetIndex] = value;
+        valueSpan.textContent = value.toFixed(2);
+      });
+
+      label.appendChild(nameSpan);
+      label.appendChild(valueSpan);
+      row.appendChild(label);
+      row.appendChild(slider);
+      groupEl.appendChild(row);
+    }
+
+    fragment.appendChild(groupEl);
+  }
+
+  ui.blendshapeControls.appendChild(fragment);
+  ui.blendshapeNone.style.display = 'none';
+  ui.blendshapeControls.style.display = '';
 }
 
 function resetCamera() {
@@ -343,6 +534,8 @@ async function loadModel(url) {
 
   currentModel.traverse((child) => {
     if (!child.isMesh) return;
+    child.userData.originalMaterial = child.material;
+    smoothMeshNormals(child);
     child.castShadow = ui.shadowsEnabled.checked;
     child.receiveShadow = ui.shadowsEnabled.checked;
   });
@@ -350,6 +543,8 @@ async function loadModel(url) {
   root.add(currentModel);
   frameModel(currentModel);
   setupAnimations(gltf);
+  setupBlendshapeControls(currentModel);
+  applyMaterialOverride(ui.materialOverride.value);
 }
 
 function getLowerExtension(source) {
@@ -556,6 +751,10 @@ ui.ambientEnabled.addEventListener('change', () => {
 
 ui.envBackground.addEventListener('change', () => {
   scene.background = ui.envBackground.checked && currentHdrTexture ? currentHdrTexture : new THREE.Color('#1a1f28');
+});
+
+ui.materialOverride.addEventListener('change', () => {
+  applyMaterialOverride(ui.materialOverride.value);
 });
 
 ui.gridEnabled.addEventListener('change', setGroundMode);
