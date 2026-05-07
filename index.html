@@ -97,6 +97,11 @@
             </div>
             <label class="row"><input id="animLoop" type="checkbox" checked /> Loop</label>
           </div>
+          <hr class="section-divider" />
+          <label for="animGlbUpload">External animation .glb / .gltf</label>
+          <input id="animGlbUpload" type="file" accept=".glb,.gltf,model/gltf-binary,model/gltf+json" />
+          <span id="animGlbStatus" class="hint anim-glb-status"></span>
+          <button id="animGlbClear" style="display:none">&#10005; Clear External Animation</button>
         </div>
       </section>
 
@@ -105,6 +110,53 @@
         <div id="sectionBlendshapes" class="section-body closed">
           <p id="blendshapeNone" class="hint">No blendshapes in loaded model.</p>
           <div id="blendshapeControls" style="display:none"></div>
+        </div>
+      </section>
+
+      <section>
+        <h2 class="section-header closed" data-target="sectionSpeech">Speech Animation <span class="chevron">&#9660;</span></h2>
+        <div id="sectionSpeech" class="section-body closed">
+          <p id="speechStatus" class="hint">Upload a WAV file and a Rhubarb JSON to begin.</p>
+
+          <label for="lipSyncWav">Audio (.wav)</label>
+          <input id="lipSyncWav" type="file" accept=".wav,audio/wav" />
+
+          <label for="lipSyncJson">Rhubarb JSON</label>
+          <input id="lipSyncJson" type="file" accept=".json,application/json" />
+
+          <div id="speechControls" style="display:none">
+            <div class="row" style="margin-top:8px">
+              <button id="lipSyncPlay" style="margin-top:0">&#9654; Play Speech</button>
+              <button id="lipSyncStop" style="margin-top:0">&#9632; Stop</button>
+            </div>
+            <p class="hint" style="margin:6px 0 0">Active shape: <span id="lipSyncShape">&#8212;</span></p>
+          </div>
+
+          <details class="subsection-details">
+            <summary class="subsection-summary">Viseme Mapping <span id="mappingPresetLabel" class="hint-inline">(no model loaded)</span></summary>
+            <div class="subsection-body">
+              <div class="row" style="margin:6px 0 4px">
+                <label style="margin:0;flex:0 0 auto">Preset</label>
+                <select id="mappingPreset" style="flex:1">
+                  <option value="arkit">ARKit</option>
+                  <option value="cc5">CC5 (Character Creator)</option>
+                  <option value="custom">Custom</option>
+                </select>
+              </div>
+              <table class="mapping-table">
+                <thead>
+                  <tr><th>Cue</th><th>Shape name</th><th>Weight</th><th></th></tr>
+                </thead>
+                <tbody id="mappingTableBody"></tbody>
+              </table>
+              <div class="row" style="margin-top:6px;gap:4px;flex-wrap:wrap">
+                <button id="mappingAddRow" class="btn-sm" style="margin-top:0">+ Row</button>
+                <button id="mappingExport" class="btn-sm" style="margin-top:0">&#8659; Export</button>
+                <label class="btn-sm btn-file-label" for="mappingImport">&#8657; Import</label>
+                <input id="mappingImport" type="file" accept=".json,application/json" style="display:none" />
+              </div>
+            </div>
+          </details>
         </div>
       </section>
 

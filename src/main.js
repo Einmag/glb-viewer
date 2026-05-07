@@ -91,6 +91,65 @@ let mixer = null;
 let currentAction = null;
 let animationClips = [];
 const clock = new THREE.Clock();
+let currentGltf = null;         // stored for external anim clip restoration
+
+// ── Lip sync state ─────────────────────────────────────────────
+let lipSyncCues = null;         // parsed Rhubarb mouthCues array
+let lipSyncAudioBuffer = null;  // decoded AudioBuffer
+let lipSyncAudioCtx = null;     // lazy AudioContext
+let lipSyncSourceNode = null;   // current BufferSourceNode
+let lipSyncStartTime = 0;       // audioCtx.currentTime at playback start
+let lipSyncPlaying = false;
+let lipSyncCurrentShape = 'X';
+
+// ── External animation GLB state ───────────────────────────────
+let externalAnimBlobUrl = null;
+
+// ── Viseme presets ─────────────────────────────────────────────
+const CUES = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'X'];
+const CUE_DESCRIPTIONS = {
+  A: 'P/B/M', B: 'K/S/T', C: 'EH', D: 'AA',
+  E: 'AO/ER', F: 'UW/OW', G: 'F/V', H: 'L/N', X: 'silence'
+};
+
+const ARKIT_PRESET = {
+  A: [{ name: 'viseme_PP',  weight: 1.0 }],
+  B: [{ name: 'viseme_kk',  weight: 0.8 }, { name: 'viseme_E',   weight: 0.4 }],
+  C: [{ name: 'viseme_E',   weight: 0.9 }],
+  D: [{ name: 'viseme_aa',  weight: 1.0 }],
+  E: [{ name: 'viseme_O',   weight: 0.9 }, { name: 'viseme_RR',  weight: 0.5 }],
+  F: [{ name: 'viseme_U',   weight: 1.0 }],
+  G: [{ name: 'viseme_FF',  weight: 1.0 }],
+  H: [{ name: 'viseme_nn',  weight: 0.8 }],
+  X: [{ name: 'viseme_sil', weight: 1.0 }],
+};
+
+const CC5_PRESET = {
+  A: [{ name: 'B_M_P',       weight: 1.0 }],
+  B: [{ name: 'S_Z',         weight: 0.8 }, { name: 'EE',          weight: 0.4 }],
+  C: [{ name: 'AE',          weight: 0.9 }, { name: 'Mouth_Open',  weight: 0.3 }],
+  D: [{ name: 'Ah',          weight: 1.0 }, { name: 'Mouth_Open',  weight: 0.9 }],
+  E: [{ name: 'Oh',          weight: 0.9 }, { name: 'Er',          weight: 0.5 }],
+  F: [{ name: 'W_OO',        weight: 1.0 }],
+  G: [{ name: 'F_V',         weight: 1.0 }],
+  H: [{ name: 'T_L_D_N',    weight: 0.8 }, { name: 'V_Tongue_Up', weight: 0.5 }],
+  X: [{ name: 'Mouth_Close', weight: 0.5 }],
+};
+
+const PRESETS = { arkit: ARKIT_PRESET, cc5: CC5_PRESET };
+
+function presetToRows(presetObj) {
+  const rows = [];
+  for (const cue of CUES) {
+    for (const { name, weight } of (presetObj[cue] || [])) {
+      rows.push({ cue, name, weight });
+    }
+  }
+  return rows;
+}
+
+let mappingRows = presetToRows(ARKIT_PRESET);
+let visemeIndex = new Map(); // shapeName → [{influences, morphIndex}]
 
 // Light base intensities (used as 1Ã— for the multiplier slider)
 const lightBaseIntensity = {
@@ -183,7 +242,22 @@ const ui = {
   blendshapeControls: document.querySelector('#blendshapeControls'),
   panel: document.querySelector('#panel'),
   panelToggle: document.querySelector('#panelToggle'),
-  qualitySelect: document.querySelector('#qualitySelect')
+  qualitySelect: document.querySelector('#qualitySelect'),
+  animGlbUpload:      document.querySelector('#animGlbUpload'),
+  animGlbClear:       document.querySelector('#animGlbClear'),
+  lipSyncWav:         document.querySelector('#lipSyncWav'),
+  lipSyncJson:        document.querySelector('#lipSyncJson'),
+  lipSyncPlay:        document.querySelector('#lipSyncPlay'),
+  lipSyncStop:        document.querySelector('#lipSyncStop'),
+  lipSyncShape:       document.querySelector('#lipSyncShape'),
+  speechStatus:       document.querySelector('#speechStatus'),
+  speechControls:     document.querySelector('#speechControls'),
+  mappingPreset:      document.querySelector('#mappingPreset'),
+  mappingTableBody:   document.querySelector('#mappingTableBody'),
+  mappingAddRow:      document.querySelector('#mappingAddRow'),
+  mappingExport:      document.querySelector('#mappingExport'),
+  mappingImport:      document.querySelector('#mappingImport'),
+  mappingPresetLabel: document.querySelector('#mappingPresetLabel'),
 };
 
 async function loadList(url, key) {
@@ -527,6 +601,293 @@ function resetCamera() {
   controls.update();
 }
 
+// ── Viseme mapping helpers ──────────────────────────────────────
+
+function detectMappingPreset(model) {
+  if (!model) return 'unknown';
+  const allMorphNames = new Set();
+  model.traverse((child) => {
+    if (!child.isMesh || !child.morphTargetDictionary) return;
+    Object.keys(child.morphTargetDictionary).forEach((n) => allMorphNames.add(n));
+  });
+  const cc5Score   = ['B_M_P','Ah','EE','Oh','W_OO','F_V','S_Z','AE'].filter((k) => allMorphNames.has(k)).length;
+  const arkitScore = ['viseme_PP','viseme_aa','viseme_kk','viseme_E','viseme_U'].filter((k) => allMorphNames.has(k)).length;
+  if (cc5Score >= 2)   return 'cc5';
+  if (arkitScore >= 2) return 'arkit';
+  return 'unknown';
+}
+
+function buildVisemeIndex(model, rows) {
+  const index = new Map();
+  if (!model) return index;
+  const allShapeNames = new Set(rows.map((r) => r.name).filter(Boolean));
+  model.traverse((child) => {
+    if (!child.isMesh || !child.morphTargetDictionary || !child.morphTargetInfluences) return;
+    for (const shapeName of allShapeNames) {
+      const morphIndex = child.morphTargetDictionary[shapeName];
+      if (morphIndex !== undefined) {
+        if (!index.has(shapeName)) index.set(shapeName, []);
+        index.get(shapeName).push({ influences: child.morphTargetInfluences, morphIndex });
+      }
+    }
+  });
+  return index;
+}
+
+function rebuildVisemeIndex() {
+  visemeIndex = buildVisemeIndex(currentModel, mappingRows);
+}
+
+function detectAndApplyMappingPreset(model) {
+  const detected = detectMappingPreset(model);
+  const presetKey = detected === 'unknown' ? 'arkit' : detected;
+  if (ui.mappingPreset) ui.mappingPreset.value = presetKey;
+  mappingRows = presetToRows(PRESETS[presetKey] || ARKIT_PRESET);
+  renderMappingTable();
+  rebuildVisemeIndex();
+  const label = detected === 'unknown'
+    ? 'unknown — using ARKit'
+    : detected.toUpperCase() + ' detected';
+  if (ui.mappingPresetLabel) ui.mappingPresetLabel.textContent = `(${label})`;
+  console.log(`[LipSync] Viseme preset: ${label} — ${visemeIndex.size} shapes indexed`);
+}
+
+function renderMappingTable() {
+  const tbody = ui.mappingTableBody;
+  if (!tbody) return;
+  tbody.innerHTML = '';
+  for (let i = 0; i < mappingRows.length; i++) {
+    const row = mappingRows[i];
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>
+        <select class="mapping-cue" data-idx="${i}">
+          ${CUES.map((c) => `<option value="${c}"${c === row.cue ? ' selected' : ''}>${c} (${CUE_DESCRIPTIONS[c]})</option>`).join('')}
+        </select>
+      </td>
+      <td><input class="mapping-name" type="text" data-idx="${i}" /></td>
+      <td><input class="mapping-weight" type="number" min="0" max="1" step="0.05" value="${row.weight.toFixed(2)}" data-idx="${i}" /></td>
+      <td><button class="btn-icon mapping-remove" data-idx="${i}" title="Remove">×</button></td>
+    `;
+    // Set via .value property to avoid attribute-injection XSS
+    tr.querySelector('.mapping-name').value = row.name;
+    tbody.appendChild(tr);
+  }
+  tbody.querySelectorAll('.mapping-cue').forEach((el) => {
+    el.addEventListener('change', () => {
+      mappingRows[+el.dataset.idx].cue = el.value;
+    });
+  });
+  tbody.querySelectorAll('.mapping-name').forEach((el) => {
+    el.addEventListener('input', () => {
+      mappingRows[+el.dataset.idx].name = el.value.trim();
+      rebuildVisemeIndex();
+    });
+  });
+  tbody.querySelectorAll('.mapping-weight').forEach((el) => {
+    el.addEventListener('input', () => {
+      mappingRows[+el.dataset.idx].weight = parseFloat(el.value) || 0;
+    });
+  });
+  tbody.querySelectorAll('.mapping-remove').forEach((el) => {
+    el.addEventListener('click', () => {
+      mappingRows.splice(+el.dataset.idx, 1);
+      renderMappingTable();
+      rebuildVisemeIndex();
+    });
+  });
+}
+
+function applyVisemeCue(cue) {
+  const targetWeights = new Map();
+  for (const row of mappingRows) {
+    if (row.cue === cue && row.name) {
+      targetWeights.set(row.name, Math.max(targetWeights.get(row.name) ?? 0, row.weight));
+    }
+  }
+  for (const [shapeName, targets] of visemeIndex.entries()) {
+    const targetW = targetWeights.get(shapeName) ?? 0;
+    for (const { influences, morphIndex } of targets) {
+      influences[morphIndex] = THREE.MathUtils.lerp(influences[morphIndex], targetW, 0.25);
+    }
+  }
+}
+
+function resetAllVisemeInfluences() {
+  for (const [, targets] of visemeIndex.entries()) {
+    for (const { influences, morphIndex } of targets) {
+      influences[morphIndex] = 0;
+    }
+  }
+}
+
+function getActiveCue(t) {
+  if (!lipSyncCues || !lipSyncCues.length) return 'X';
+  let lo = 0, hi = lipSyncCues.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    const cue = lipSyncCues[mid];
+    if      (t < cue.start) hi = mid - 1;
+    else if (t >= cue.end)  lo = mid + 1;
+    else                    return cue.value;
+  }
+  return 'X';
+}
+
+// ── Lip sync audio + data ───────────────────────────────────────
+
+function parseLipSyncJson(text) {
+  const data = JSON.parse(text);
+  if (!Array.isArray(data?.mouthCues)) {
+    throw new Error('Invalid Rhubarb JSON: missing mouthCues array');
+  }
+  return data.mouthCues.map((c) => ({
+    start: +c.start,
+    end:   +c.end,
+    value: String(c.value),
+  }));
+}
+
+function updateSpeechReadyState() {
+  const ready = lipSyncAudioBuffer !== null && lipSyncCues !== null;
+  if (ui.speechControls) ui.speechControls.style.display = ready ? '' : 'none';
+  if (ready && ui.speechStatus) {
+    ui.speechStatus.textContent = `Ready — ${lipSyncCues.length} cues loaded.`;
+  }
+}
+
+function playLipSync() {
+  if (!lipSyncAudioBuffer || !lipSyncCues) return;
+  stopLipSync(false);
+  if (!lipSyncAudioCtx) lipSyncAudioCtx = new AudioContext();
+  if (lipSyncAudioCtx.state === 'suspended') lipSyncAudioCtx.resume();
+  lipSyncSourceNode = lipSyncAudioCtx.createBufferSource();
+  lipSyncSourceNode.buffer = lipSyncAudioBuffer;
+  lipSyncSourceNode.connect(lipSyncAudioCtx.destination);
+  lipSyncStartTime = lipSyncAudioCtx.currentTime;
+  lipSyncPlaying = true;
+  lipSyncCurrentShape = 'X';
+  lipSyncSourceNode.start(0);
+  lipSyncSourceNode.onended = () => stopLipSync(true);
+  if (ui.lipSyncPlay)  ui.lipSyncPlay.textContent = '⏹ Playing…';
+  if (ui.speechStatus) ui.speechStatus.textContent = 'Playing…';
+}
+
+function stopLipSync(natural = false) {
+  if (lipSyncSourceNode) {
+    try { lipSyncSourceNode.stop(); } catch (_) { /* already ended */ }
+    lipSyncSourceNode.disconnect();
+    lipSyncSourceNode = null;
+  }
+  if (lipSyncPlaying) resetAllVisemeInfluences();
+  lipSyncPlaying = false;
+  lipSyncCurrentShape = 'X';
+  if (ui.lipSyncPlay)  ui.lipSyncPlay.textContent = '▶ Play Speech';
+  if (ui.lipSyncShape) ui.lipSyncShape.textContent = '—';
+  if (ui.speechStatus && (natural || !lipSyncAudioBuffer)) {
+    ui.speechStatus.textContent = natural ? 'Done.' : 'Stopped.';
+  }
+}
+
+// ── External animation GLB ──────────────────────────────────────
+
+async function loadExternalAnimGlb(file) {
+  const statusEl = document.getElementById('animGlbStatus');
+  const clearBtn = document.getElementById('animGlbClear');
+
+  function setStatus(msg, ok) {
+    statusEl.textContent = msg;
+    statusEl.className = `hint anim-glb-status ${ok ? 'status-ok' : 'status-error'}`;
+    clearBtn.style.display = ok ? '' : 'none';
+  }
+
+  if (externalAnimBlobUrl) {
+    URL.revokeObjectURL(externalAnimBlobUrl);
+    externalAnimBlobUrl = null;
+  }
+  externalAnimBlobUrl = URL.createObjectURL(file);
+
+  let extGltf;
+  try {
+    extGltf = await gltfLoader.loadAsync(externalAnimBlobUrl);
+  } catch {
+    setStatus('✗ Failed to parse the animation GLB file.', false);
+    return;
+  }
+
+  if (!extGltf.animations || extGltf.animations.length === 0) {
+    setStatus('✗ No animation clips found in this file.', false);
+    return;
+  }
+
+  if (!currentModel) {
+    setStatus('✗ No character loaded — load a model first.', false);
+    return;
+  }
+
+  // Collect target bone names from tracks (prefix before first '.')
+  const trackTargets = new Set();
+  for (const clip of extGltf.animations) {
+    for (const track of clip.tracks) {
+      trackTargets.add(track.name.split('.')[0]);
+    }
+  }
+
+  // Collect bone names from the current character
+  const modelBones = new Set();
+  currentModel.traverse((node) => {
+    if (node.isBone || node.type === 'Bone') modelBones.add(node.name);
+  });
+
+  const matched = [...trackTargets].filter((n) => modelBones.has(n));
+  if (matched.length === 0) {
+    setStatus(
+      '✗ No matching skeleton found — bone names do not match the loaded character.',
+      false
+    );
+    return;
+  }
+
+  // Apply clips to current model's skeleton
+  if (mixer) { mixer.stopAllAction(); mixer = null; }
+  currentAction = null;
+  animationClips = extGltf.animations;
+  mixer = new THREE.AnimationMixer(currentModel);
+
+  ui.animSelect.innerHTML = '';
+  for (const clip of animationClips) {
+    const option = document.createElement('option');
+    option.value = clip.name;
+    option.textContent = `${clip.name} (${clip.duration.toFixed(2)}s)`;
+    ui.animSelect.appendChild(option);
+  }
+  ui.animNone.style.display = 'none';
+  ui.animControls.style.display = '';
+  playClip(animationClips[0].name);
+
+  setStatus(
+    `✓ ${extGltf.animations.length} clip${extGltf.animations.length > 1 ? 's' : ''} loaded` +
+    ` (${matched.length} / ${trackTargets.size} bones matched)`,
+    true
+  );
+}
+
+function clearExternalAnimGlb() {
+  if (externalAnimBlobUrl) {
+    URL.revokeObjectURL(externalAnimBlobUrl);
+    externalAnimBlobUrl = null;
+  }
+  const uploadEl = document.getElementById('animGlbUpload');
+  if (uploadEl) uploadEl.value = '';
+  const statusEl = document.getElementById('animGlbStatus');
+  if (statusEl) { statusEl.textContent = ''; statusEl.className = 'hint anim-glb-status'; }
+  const clearBtn = document.getElementById('animGlbClear');
+  if (clearBtn) clearBtn.style.display = 'none';
+  if (currentGltf) setupAnimations(currentGltf);
+}
+
+
+
 // â”€â”€ Animation helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function stopAnimation() {
@@ -603,8 +964,10 @@ async function loadModel(url) {
 
   root.add(currentModel);
   frameModel(currentModel);
+  currentGltf = gltf;
   setupAnimations(gltf);
   setupBlendshapeControls(currentModel);
+  detectAndApplyMappingPreset(currentModel);
   applyMaterialOverride(ui.materialOverride.value);
 }
 
@@ -860,6 +1223,109 @@ ui.animLoop.addEventListener('change', () => {
 
 // â”€â”€ Drag and drop â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
+// ── External animation GLB controls ────────────────────────────────────────────
+
+if (ui.animGlbUpload) {
+  ui.animGlbUpload.addEventListener('change', async (event) => {
+    const file = event.target.files?.[0];
+    if (file) await loadExternalAnimGlb(file);
+  });
+}
+
+if (ui.animGlbClear) {
+  ui.animGlbClear.addEventListener('click', clearExternalAnimGlb);
+}
+
+// ── Lip sync controls ────────────────────────────────────────────────────────
+
+if (ui.lipSyncWav) {
+  ui.lipSyncWav.addEventListener('change', async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    if (ui.speechStatus) ui.speechStatus.textContent = 'Decoding audio…';
+    try {
+      const arrayBuffer = await file.arrayBuffer();
+      if (!lipSyncAudioCtx) lipSyncAudioCtx = new AudioContext();
+      lipSyncAudioBuffer = await lipSyncAudioCtx.decodeAudioData(arrayBuffer);
+      updateSpeechReadyState();
+    } catch (err) {
+      if (ui.speechStatus) ui.speechStatus.textContent = `✗ Failed to decode WAV: ${err.message}`;
+    }
+  });
+}
+
+if (ui.lipSyncJson) {
+  ui.lipSyncJson.addEventListener('change', async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      lipSyncCues = parseLipSyncJson(text);
+      updateSpeechReadyState();
+    } catch (err) {
+      if (ui.speechStatus) ui.speechStatus.textContent = `✗ Invalid JSON: ${err.message}`;
+    }
+  });
+}
+
+if (ui.lipSyncPlay) {
+  ui.lipSyncPlay.addEventListener('click', playLipSync);
+}
+
+if (ui.lipSyncStop) {
+  ui.lipSyncStop.addEventListener('click', () => stopLipSync(false));
+}
+
+// ── Viseme mapping controls ──────────────────────────────────────────────────
+
+if (ui.mappingPreset) {
+  ui.mappingPreset.addEventListener('change', () => {
+    const presetKey = ui.mappingPreset.value;
+    mappingRows = presetToRows(PRESETS[presetKey] || ARKIT_PRESET);
+    renderMappingTable();
+    rebuildVisemeIndex();
+  });
+}
+
+if (ui.mappingAddRow) {
+  ui.mappingAddRow.addEventListener('click', () => {
+    mappingRows.push({ cue: 'X', name: '', weight: 1.0 });
+    renderMappingTable();
+  });
+}
+
+if (ui.mappingExport) {
+  ui.mappingExport.addEventListener('click', () => {
+    const blob = new Blob([JSON.stringify(mappingRows, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'viseme-mapping.json';
+    a.click();
+    URL.revokeObjectURL(a.href);
+  });
+}
+
+if (ui.mappingImport) {
+  ui.mappingImport.addEventListener('change', async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text);
+      if (!Array.isArray(parsed)) throw new Error('Expected JSON array');
+      mappingRows = parsed.map((r) => ({
+        cue: String(r.cue || 'X'),
+        name: String(r.name || ''),
+        weight: parseFloat(r.weight) || 0,
+      }));
+      renderMappingTable();
+      rebuildVisemeIndex();
+    } catch (err) {
+      console.warn('[LipSync] Failed to import mapping:', err);
+    }
+  });
+}
+
 window.addEventListener('dragover', (event) => {
   event.preventDefault();
 });
@@ -930,6 +1396,18 @@ async function init() {
   renderer.setAnimationLoop(() => {
     const delta = clock.getDelta();
     if (mixer) mixer.update(delta);
+
+    // Lip sync tick
+    if (lipSyncPlaying && lipSyncAudioCtx) {
+      const elapsed = lipSyncAudioCtx.currentTime - lipSyncStartTime;
+      const cue = getActiveCue(elapsed);
+      if (cue !== lipSyncCurrentShape) {
+        lipSyncCurrentShape = cue;
+        if (ui.lipSyncShape) ui.lipSyncShape.textContent = cue;
+      }
+      applyVisemeCue(cue);
+    }
+
     controls.update();
     renderer.render(scene, camera);
   });

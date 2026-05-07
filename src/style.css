@@ -305,6 +305,138 @@ canvas {
   }
 }
 
+/* ── Speech animation & mapping ── */
+.section-divider {
+  border: none;
+  border-top: 1px solid #263142;
+  margin: 12px 0 8px;
+}
+
+.anim-glb-status {
+  display: block;
+  margin-top: 4px;
+  word-break: break-word;
+}
+
+.status-ok {
+  color: #52b788;
+}
+
+.status-error {
+  color: #ff6b6b;
+}
+
+.hint-inline {
+  font-size: 0.78rem;
+  color: #8ea0b5;
+  font-weight: 400;
+}
+
+/* Mapping sub-section */
+.subsection-details {
+  margin-top: 12px;
+  border: 1px solid #263142;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.subsection-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 0.86rem;
+  font-weight: 600;
+  color: #c9d5e0;
+  background: #0d1523;
+  list-style: none;
+}
+
+.subsection-summary:hover {
+  background: #111c2e;
+}
+
+.subsection-summary::-webkit-details-marker {
+  display: none;
+}
+
+.subsection-body {
+  padding: 8px 10px 10px;
+  background: #0a1120;
+}
+
+.mapping-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+  margin-top: 4px;
+}
+
+.mapping-table th {
+  text-align: left;
+  color: #8ea0b5;
+  font-weight: 600;
+  padding: 3px 4px;
+  border-bottom: 1px solid #263142;
+}
+
+.mapping-table td {
+  padding: 2px 2px;
+  vertical-align: middle;
+}
+
+.mapping-table select,
+.mapping-table input[type='text'],
+.mapping-table input[type='number'] {
+  width: 100%;
+  padding: 3px 5px;
+  font-size: 0.78rem;
+  border-radius: 4px;
+}
+
+.mapping-table input[type='number'] {
+  width: 52px;
+}
+
+.btn-sm {
+  padding: 4px 8px;
+  font-size: 0.8rem;
+  flex: 1;
+}
+
+.btn-file-label {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 8px;
+  font-size: 0.8rem;
+  border-radius: 6px;
+  border: 1px solid #3c4b61;
+  background: #101827;
+  color: #e6edf3;
+  cursor: pointer;
+  flex: 1;
+  text-align: center;
+}
+
+.btn-file-label:hover {
+  background: #172235;
+}
+
+.btn-icon {
+  width: auto;
+  padding: 2px 7px;
+  font-size: 0.9rem;
+  margin-top: 0;
+  line-height: 1;
+}
+
+#sectionSpeech {
+  max-height: 1100px;
+}
+
 /* ── Desktop: panel toggle always visible ── */
 @media (min-width: 701px) {
   .panel-toggle {
