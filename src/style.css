@@ -456,7 +456,7 @@ canvas {
   }
 
   .panel {
-    overflow: hidden;
+    overflow-y: auto;
     transition: width 0.25s ease, padding 0.25s ease, transform 0.25s ease;
   }
 

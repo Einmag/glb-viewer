@@ -101,6 +101,7 @@ let lipSyncSourceNode = null;   // current BufferSourceNode
 let lipSyncStartTime = 0;       // audioCtx.currentTime at playback start
 let lipSyncPlaying = false;
 let lipSyncCurrentShape = 'X';
+let lipSyncStrength = 1.0;
 
 // ── External animation GLB state ───────────────────────────────
 let externalAnimBlobUrl = null;
@@ -125,16 +126,22 @@ const ARKIT_PRESET = {
 };
 
 const CC5_PRESET = {
-  A: [{ name: 'B_M_P',       weight: 1.0 }],
-  B: [{ name: 'S_Z',         weight: 0.8 }, { name: 'EE',          weight: 0.4 }],
-  C: [{ name: 'AE',          weight: 0.9 }, { name: 'Mouth_Open',  weight: 0.3 }],
-  D: [{ name: 'Ah',          weight: 1.0 }, { name: 'Mouth_Open',  weight: 0.9 }],
-  E: [{ name: 'Oh',          weight: 0.9 }, { name: 'Er',          weight: 0.5 }],
-  F: [{ name: 'W_OO',        weight: 1.0 }],
-  G: [{ name: 'F_V',         weight: 1.0 }],
-  H: [{ name: 'T_L_D_N',    weight: 0.8 }, { name: 'V_Tongue_Up', weight: 0.5 }],
-  X: [{ name: 'Mouth_Close', weight: 0.5 }],
-};
+    // Covers both CC5 "short" naming (older exports) and CC5 "V_" prefix naming (standard iClone/CC5 exports)
+    A: [{ name: 'B_M_P',        weight: 1.0 }, { name: 'V_Explosive',   weight: 1.0 }],
+    B: [{ name: 'S_Z',          weight: 0.8 }, { name: 'EE',            weight: 0.4 },
+      { name: 'V_Dental',     weight: 0.8 }, { name: 'V_Wide',        weight: 0.4 }],
+    C: [{ name: 'AE',           weight: 0.9 }, { name: 'Mouth_Open',    weight: 0.3 },
+      { name: 'V_AFR',        weight: 0.9 }],
+    D: [{ name: 'Ah',           weight: 1.0 }, { name: 'Mouth_Open',    weight: 0.9 },
+      { name: 'V_Open',       weight: 1.0 }],
+    E: [{ name: 'Oh',           weight: 0.9 }, { name: 'Er',            weight: 0.5 },
+      { name: 'V_Oh',         weight: 0.9 }, { name: 'V_R',           weight: 0.5 }],
+    F: [{ name: 'W_OO',         weight: 1.0 }, { name: 'V_Tight',       weight: 1.0 }],
+    G: [{ name: 'F_V',          weight: 1.0 }, { name: 'V_Dental_Lip',  weight: 1.0 }],
+    H: [{ name: 'T_L_D_N',     weight: 0.8 }, { name: 'V_Tongue_Up',   weight: 0.5 },
+      { name: 'V_Dental',     weight: 0.8 }, { name: 'V_Tongue_up',   weight: 0.5 }],
+    X: [{ name: 'Mouth_Close',  weight: 0.5 }],
+  };
 
 const PRESETS = { arkit: ARKIT_PRESET, cc5: CC5_PRESET };
 
@@ -249,6 +256,8 @@ const ui = {
   lipSyncJson:        document.querySelector('#lipSyncJson'),
   lipSyncPlay:        document.querySelector('#lipSyncPlay'),
   lipSyncStop:        document.querySelector('#lipSyncStop'),
+  lipSyncStrength:    document.querySelector('#lipSyncStrength'),
+  lipSyncStrengthVal: document.querySelector('#lipSyncStrengthVal'),
   lipSyncShape:       document.querySelector('#lipSyncShape'),
   speechStatus:       document.querySelector('#speechStatus'),
   speechControls:     document.querySelector('#speechControls'),
@@ -610,7 +619,10 @@ function detectMappingPreset(model) {
     if (!child.isMesh || !child.morphTargetDictionary) return;
     Object.keys(child.morphTargetDictionary).forEach((n) => allMorphNames.add(n));
   });
-  const cc5Score   = ['B_M_P','Ah','EE','Oh','W_OO','F_V','S_Z','AE'].filter((k) => allMorphNames.has(k)).length;
+  console.log('[LipSync] All morph target names found on model:', [...allMorphNames].sort().join(', '));
+  // Check both CC5 short names and V_ prefix names
+  const cc5Score   = ['B_M_P','Ah','EE','Oh','W_OO','F_V','S_Z','AE',
+                       'V_Explosive','V_Open','V_Wide','V_Oh','V_Tight','V_Dental_Lip'].filter((k) => allMorphNames.has(k)).length;
   const arkitScore = ['viseme_PP','viseme_aa','viseme_kk','viseme_E','viseme_U'].filter((k) => allMorphNames.has(k)).length;
   if (cc5Score >= 2)   return 'cc5';
   if (arkitScore >= 2) return 'arkit';
@@ -702,7 +714,8 @@ function applyVisemeCue(cue) {
   const targetWeights = new Map();
   for (const row of mappingRows) {
     if (row.cue === cue && row.name) {
-      targetWeights.set(row.name, Math.max(targetWeights.get(row.name) ?? 0, row.weight));
+      const scaledWeight = Math.min(1, row.weight * lipSyncStrength);
+      targetWeights.set(row.name, Math.max(targetWeights.get(row.name) ?? 0, scaledWeight));
     }
   }
   for (const [shapeName, targets] of visemeIndex.entries()) {
@@ -1274,6 +1287,13 @@ if (ui.lipSyncPlay) {
 
 if (ui.lipSyncStop) {
   ui.lipSyncStop.addEventListener('click', () => stopLipSync(false));
+}
+
+if (ui.lipSyncStrength && ui.lipSyncStrengthVal) {
+  ui.lipSyncStrength.addEventListener('input', () => {
+    lipSyncStrength = parseFloat(ui.lipSyncStrength.value) || 1;
+    ui.lipSyncStrengthVal.textContent = lipSyncStrength.toFixed(2);
+  });
 }
 
 // ── Viseme mapping controls ──────────────────────────────────────────────────
