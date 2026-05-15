@@ -80,6 +80,40 @@
           <label class="row"><input id="gridEnabled" type="checkbox" checked /> Grid floor</label>
           <label class="row"><input id="planeEnabled" type="checkbox" /> Shadow receiver plane</label>
           <label class="row"><input id="shadowsEnabled" type="checkbox" checked /> Cast/receive shadows</label>
+
+          <details class="subsection-details" style="margin-top:10px">
+            <summary class="subsection-summary">Advanced Shadows</summary>
+            <div class="subsection-body">
+              <div class="row" style="margin:6px 0 4px">
+                <label for="shadowMapSize" style="margin:0;flex:0 0 auto">Map size</label>
+                <select id="shadowMapSize" style="flex:1">
+                  <option value="512">512</option>
+                  <option value="1024">1024</option>
+                  <option value="2048" selected>2048</option>
+                  <option value="4096">4096</option>
+                </select>
+              </div>
+              <p class="hint" style="margin:4px 0 8px">Applied: <span id="shadowMapSizeVal">2048px</span></p>
+
+              <div class="row" style="margin:6px 0 4px">
+                <label for="shadowTuneLight" style="margin:0;flex:0 0 auto">Tune light</label>
+                <select id="shadowTuneLight" style="flex:1">
+                  <option value="directional" selected>Directional</option>
+                  <option value="spot">Spot</option>
+                  <option value="point">Point</option>
+                </select>
+              </div>
+
+              <label for="shadowBias">Shadow bias: <span id="shadowBiasVal">-0.0002</span></label>
+              <input id="shadowBias" type="range" min="-0.005" max="0.005" step="0.0001" value="-0.0002" />
+
+              <label for="shadowNormalBias">Normal bias: <span id="shadowNormalBiasVal">0.020</span></label>
+              <input id="shadowNormalBias" type="range" min="0" max="0.2" step="0.001" value="0.02" />
+
+              <label for="shadowFrustumPad">Dir. frustum padding: <span id="shadowFrustumPadVal">1.00</span></label>
+              <input id="shadowFrustumPad" type="range" min="0.2" max="4" step="0.05" value="1.0" />
+            </div>
+          </details>
         </div>
       </section>
 

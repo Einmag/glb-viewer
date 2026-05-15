@@ -15,6 +15,7 @@ renderer.toneMappingExposure = 1.0;
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 viewport.appendChild(renderer.domElement);
+const MAX_SHADOW_MAP_SIZE = renderer.capabilities.maxTextureSize;
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color('#1a1f28');
@@ -45,9 +46,20 @@ let currentHdrBlobUrl = null;
 const _dpr = window.devicePixelRatio;
 const QUALITY_PRESETS = {
   low:    { pixelRatio: 1,                  shadowSize: 512,  shadows: false, ibl: false },
-  medium: { pixelRatio: Math.min(_dpr, 1.5), shadowSize: 1024, shadows: true,  ibl: true  },
-  high:   { pixelRatio: Math.min(_dpr, 2),  shadowSize: 2048, shadows: true,  ibl: true  }
+  medium: { pixelRatio: Math.min(_dpr, 1.5), shadowSize: 2048, shadows: true,  ibl: true  },
+  high:   { pixelRatio: Math.min(_dpr, 2),  shadowSize: 4096, shadows: true,  ibl: true  }
 };
+let manualShadowMapSize = null;
+let shadowFrustumPadding = 1.0;
+const lastFramedModelSize = new THREE.Vector3(1, 1, 1);
+
+function getShadowMapSize(targetSize) {
+  return Math.min(targetSize, MAX_SHADOW_MAP_SIZE);
+}
+
+function getRequestedShadowMapSize(presetShadowSize) {
+  return manualShadowMapSize ?? presetShadowSize;
+}
 
 function detectQuality() {
   const isMobile = /Android|iPhone|iPad/i.test(navigator.userAgent);
@@ -67,6 +79,8 @@ function applyQualityPreset(name) {
 
   // Resize shadow maps on lights that cast shadows
   const shadowLights = [directionalLight, pointLight, spotLight];
+  const requestedShadowMapSize = getRequestedShadowMapSize(preset.shadowSize);
+  const appliedShadowMapSize = getShadowMapSize(requestedShadowMapSize);
   for (const light of shadowLights) {
     light.castShadow = preset.shadows;
     if (preset.shadows) {
@@ -74,9 +88,12 @@ function applyQualityPreset(name) {
         light.shadow.map.dispose();
         light.shadow.map = null;
       }
-      light.shadow.mapSize.set(preset.shadowSize, preset.shadowSize);
+      light.shadow.mapSize.set(appliedShadowMapSize, appliedShadowMapSize);
+      light.shadow.needsUpdate = true;
     }
   }
+  renderer.shadowMap.needsUpdate = true;
+  updateShadowMapUi(requestedShadowMapSize, appliedShadowMapSize);
 
   // IBL environment reflections
   scene.environment = preset.ibl && currentEnvMap ? currentEnvMap : null;
@@ -184,6 +201,8 @@ const directionalLight = new THREE.DirectionalLight(0xffffff, lightBaseIntensity
 directionalLight.position.set(4, 7, 3);
 directionalLight.castShadow = true;
 directionalLight.shadow.mapSize.set(2048, 2048);
+directionalLight.shadow.bias = -0.0002;
+directionalLight.shadow.normalBias = 0.02;
 directionalLight.shadow.camera.near = 0.1;
 directionalLight.shadow.camera.far = 40;
 directionalLight.shadow.camera.left = -8;
@@ -195,6 +214,8 @@ scene.add(directionalLight);
 const pointLight = new THREE.PointLight(0xffffff, lightBaseIntensity.point, 100, 2);
 pointLight.position.set(2.5, 3, 2.5);
 pointLight.castShadow = true;
+pointLight.shadow.bias = -0.0005;
+pointLight.shadow.normalBias = 0.04;
 pointLight.visible = false;
 scene.add(pointLight);
 
@@ -202,6 +223,8 @@ const spotLight = new THREE.SpotLight(0xffffff, lightBaseIntensity.spot, 100, Ma
 spotLight.position.set(3.5, 5, 3.5);
 spotLight.target.position.set(0, 0.7, 0);
 spotLight.castShadow = true;
+spotLight.shadow.bias = -0.0002;
+spotLight.shadow.normalBias = 0.02;
 spotLight.visible = false;
 scene.add(spotLight);
 scene.add(spotLight.target);
@@ -238,6 +261,15 @@ const ui = {
   gridEnabled: document.querySelector('#gridEnabled'),
   planeEnabled: document.querySelector('#planeEnabled'),
   shadowsEnabled: document.querySelector('#shadowsEnabled'),
+  shadowMapSize: document.querySelector('#shadowMapSize'),
+  shadowMapSizeVal: document.querySelector('#shadowMapSizeVal'),
+  shadowTuneLight: document.querySelector('#shadowTuneLight'),
+  shadowBias: document.querySelector('#shadowBias'),
+  shadowBiasVal: document.querySelector('#shadowBiasVal'),
+  shadowNormalBias: document.querySelector('#shadowNormalBias'),
+  shadowNormalBiasVal: document.querySelector('#shadowNormalBiasVal'),
+  shadowFrustumPad: document.querySelector('#shadowFrustumPad'),
+  shadowFrustumPadVal: document.querySelector('#shadowFrustumPadVal'),
   animNone: document.querySelector('#animNone'),
   animControls: document.querySelector('#animControls'),
   animSelect: document.querySelector('#animSelect'),
@@ -346,6 +378,7 @@ function frameModel(model) {
   const box = new THREE.Box3().setFromObject(model);
   const center = box.getCenter(new THREE.Vector3());
   const size = box.getSize(new THREE.Vector3());
+  lastFramedModelSize.copy(size);
 
   model.position.sub(center);
 
@@ -365,6 +398,77 @@ function frameModel(model) {
   // Store for reset
   defaultCameraPosition.copy(newPos);
   defaultCameraTarget.set(0, 0, 0);
+
+  // Keep the directional shadow frustum tight to the model bounds for higher texel density.
+  fitDirectionalShadowCamera(size);
+}
+
+function fitDirectionalShadowCamera(size) {
+  const maxHorizontal = Math.max(size.x, size.z, 0.5);
+  const maxVertical = Math.max(size.y, 0.5);
+  const radius = Math.max(maxHorizontal * 0.9, maxVertical * 0.8) + shadowFrustumPadding;
+
+  directionalLight.shadow.camera.left = -radius;
+  directionalLight.shadow.camera.right = radius;
+  directionalLight.shadow.camera.top = radius;
+  directionalLight.shadow.camera.bottom = -radius;
+  directionalLight.shadow.camera.near = 0.1;
+  directionalLight.shadow.camera.far = Math.max(30, maxVertical * 12);
+  directionalLight.shadow.camera.updateProjectionMatrix();
+  directionalLight.shadow.needsUpdate = true;
+}
+
+function updateShadowMapUi(requestedSize, appliedSize) {
+  if (ui.shadowMapSizeVal) {
+    ui.shadowMapSizeVal.textContent = requestedSize === appliedSize
+      ? `${appliedSize}px`
+      : `${requestedSize}px -> ${appliedSize}px (GPU cap)`;
+  }
+  if (ui.shadowMapSize) {
+    ui.shadowMapSize.value = String(requestedSize);
+  }
+}
+
+function getTunableShadowLight() {
+  if (!ui.shadowTuneLight) return directionalLight;
+  if (ui.shadowTuneLight.value === 'spot') return spotLight;
+  if (ui.shadowTuneLight.value === 'point') return pointLight;
+  return directionalLight;
+}
+
+function syncShadowTuningUiFromLight() {
+  const light = getTunableShadowLight();
+  if (!light?.shadow) return;
+
+  if (ui.shadowBias && ui.shadowBiasVal) {
+    ui.shadowBias.value = String(light.shadow.bias);
+    ui.shadowBiasVal.textContent = light.shadow.bias.toFixed(4);
+  }
+
+  if (ui.shadowNormalBias && ui.shadowNormalBiasVal) {
+    ui.shadowNormalBias.value = String(light.shadow.normalBias);
+    ui.shadowNormalBiasVal.textContent = light.shadow.normalBias.toFixed(3);
+  }
+}
+
+function applyShadowMapSizeOverride(requestedSize) {
+  manualShadowMapSize = requestedSize;
+  const qualityName = ui.qualitySelect?.value || 'medium';
+  const presetShadowSize = QUALITY_PRESETS[qualityName]?.shadowSize ?? 2048;
+  const requested = getRequestedShadowMapSize(presetShadowSize);
+  const applied = getShadowMapSize(requested);
+
+  const shadowLights = [directionalLight, pointLight, spotLight];
+  for (const light of shadowLights) {
+    if (light.shadow.map) {
+      light.shadow.map.dispose();
+      light.shadow.map = null;
+    }
+    light.shadow.mapSize.set(applied, applied);
+    light.shadow.needsUpdate = true;
+  }
+  renderer.shadowMap.needsUpdate = true;
+  updateShadowMapUi(requested, applied);
 }
 
 function smoothMeshNormals(mesh) {
@@ -1197,6 +1301,50 @@ ui.materialOverride.addEventListener('change', () => {
 ui.gridEnabled.addEventListener('change', setGroundMode);
 ui.planeEnabled.addEventListener('change', setGroundMode);
 ui.shadowsEnabled.addEventListener('change', () => setShadowMode(ui.shadowsEnabled.checked));
+ui.qualitySelect.addEventListener('change', () => {
+  applyQualityPreset(ui.qualitySelect.value);
+  setShadowMode(ui.shadowsEnabled.checked);
+});
+
+if (ui.shadowMapSize) {
+  ui.shadowMapSize.addEventListener('change', () => {
+    const size = Number.parseInt(ui.shadowMapSize.value, 10);
+    if (!Number.isFinite(size) || size <= 0) return;
+    applyShadowMapSizeOverride(size);
+  });
+}
+
+if (ui.shadowTuneLight) {
+  ui.shadowTuneLight.addEventListener('change', syncShadowTuningUiFromLight);
+}
+
+if (ui.shadowBias && ui.shadowBiasVal) {
+  ui.shadowBias.addEventListener('input', () => {
+    const light = getTunableShadowLight();
+    const value = parseFloat(ui.shadowBias.value);
+    light.shadow.bias = value;
+    light.shadow.needsUpdate = true;
+    ui.shadowBiasVal.textContent = value.toFixed(4);
+  });
+}
+
+if (ui.shadowNormalBias && ui.shadowNormalBiasVal) {
+  ui.shadowNormalBias.addEventListener('input', () => {
+    const light = getTunableShadowLight();
+    const value = parseFloat(ui.shadowNormalBias.value);
+    light.shadow.normalBias = value;
+    light.shadow.needsUpdate = true;
+    ui.shadowNormalBiasVal.textContent = value.toFixed(3);
+  });
+}
+
+if (ui.shadowFrustumPad && ui.shadowFrustumPadVal) {
+  ui.shadowFrustumPad.addEventListener('input', () => {
+    shadowFrustumPadding = parseFloat(ui.shadowFrustumPad.value);
+    ui.shadowFrustumPadVal.textContent = shadowFrustumPadding.toFixed(2);
+    fitDirectionalShadowCamera(lastFramedModelSize);
+  });
+}
 
 // â”€â”€ Animation controls â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
@@ -1408,6 +1556,7 @@ async function init() {
   const detectedOption = ui.qualitySelect.querySelector(`option[value="${detectedQuality}"]`);
   if (detectedOption) detectedOption.textContent += ' (auto)';
   applyQualityPreset(detectedQuality);
+  syncShadowTuningUiFromLight();
 
   // Default panel state: open on desktop, closed on mobile
   const isMobile = window.matchMedia('(max-width: 700px)').matches;
